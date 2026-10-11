@@ -1,0 +1,19 @@
+{
+  "name": "yuhuan-design-guide",
+  "version": "9.0.0",
+  "private": true,
+  "description": "浙江大学未来设计实验室 · 小 D 实验室向导，可编辑完整源码",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "start": "node scripts/dev-server.mjs",
+    "check": "node scripts/check.mjs",
+    "export:offline": "node scripts/export-offline.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}

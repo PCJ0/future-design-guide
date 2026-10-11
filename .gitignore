@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.DS_Store
+review/
+*.log
+.local/
+.npm-cache/
+test-artifacts/
+
+# Local backups and alternate copies
+旧版/
+future-design-lab 4/

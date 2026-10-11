@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#d8cfc0"><title>浙江大学未来设计实验室 · 小 D 向导</title><link rel="stylesheet" href="style.css"></head>
+<body data-phase="idle">
+<main id="stage" aria-label="浙江大学未来设计实验室向导">
+ <section id="idleScene" class="scene"><img src="assets/idle-lab-clean.png" alt="未来设计实验室迎宾大厅"></section>
+ <section id="choiceScene" class="scene"><img src="assets/choice-v5.png" alt="设计展览与产业创新展区"></section>
+ <section id="overviewScene" class="scene"><img src="assets/intro-empty-v4.png" alt="实验室介绍空间"><div class="room-haze"></div></section>
+ <section id="galleryScene" class="scene" aria-label="研究方向"><div id="galleryWorld"></div><div class="gallery-brand">未来设计实验室<span>FUTURE DESIGN LAB</span><i></i></div><div class="floor-trail"></div></section>
+ <section id="loungeScene" class="scene"><img src="assets/lounge-v5.png" alt="实验室问题交流空间"></section>
+ <section id="introVisuals" hidden aria-label="未来设计实验室概览">
+  <article id="leftVisual" class="overview-card"><div class="overview-image left-image"></div><div class="overview-copy"><span class="eyebrow">FUTURE DESIGN LAB</span><h2>设计 × 人工智能 × 产业</h2><p>围绕实际产业问题，探索数据智能、绿色装备和数字文旅方向。</p><div class="overview-tags"><span>研究方向</span><span>技术能力</span><span>产业问题</span></div></div></article>
+  <article id="rightVisual" class="overview-card"><div class="overview-image right-image"></div><div class="overview-copy"><span class="eyebrow">RESEARCH & APPLICATION</span><h2>从能力到应用案例</h2><p>通过实验室介绍材料中的图片和视频，了解技术探索与案例场景。</p><div class="overview-tags"><span>设计数据</span><span>智能装备</span><span>数字交互</span></div></div></article>
+ </section>
+<section id="projectOverview" aria-label="实验室项目总览" hidden><header><div><span class="eyebrow">浙江大学 · FUTURE DESIGN LAB</span><h1>实验室项目总览</h1><p></p></div><button id="closeProjectOverview" aria-label="返回向导页面">← 返回选择</button></header><div id="projectOverviewGrid"></div><aside id="projectAssistant"><div id="projectBubble" class="speech-bubble" aria-live="polite">小 D 正在准备语音内容…</div></aside><button id="allCategories" hidden>← 所有项目类别</button><nav id="projectNavigation" aria-label="项目页面导航"><button id="projectReturnChoice">回到选择</button><button id="projectReturnHome">回到首页</button></nav></section>
+ <div id="walkingShadow"></div><div id="robotAnchor"><canvas id="robot" width="1040" height="1000" aria-label="小 D 实验室向导"></canvas></div>
+ <div id="seatedAnchor" hidden><canvas id="seatedRobot" width="1040" height="1000" aria-label="小 D 正在倾听"></canvas></div>
+ <div id="loungeForeground"></div>
+ <div id="choices" hidden><button id="explore"><span class="choice-index">01 / EXPLORE</span><strong>实验室介绍</strong><span>和小 D 一起，认识研究方向与技术案例</span></button><button id="needs"><span class="choice-index">02 / LET’S TALK</span><strong>设计需求</strong><span>聊聊你的想法，从问题走向方案</span></button></div>
+ <div id="welcomePrompt"><p>你好，我是小 D。</p><button id="start">开启语音导览 <span>→</span></button><small id="welcomeHint">允许麦克风后，说“小 D，带我参观”</small></div>
+ <section id="conversation" hidden><span class="eyebrow">A CONVERSATION WITH LITTLE D</span><h2 id="conversationTitle">你好，<br>我们聊聊你关注的问题。</h2><p id="conversationPrompt"></p><div class="voice-orbit" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span id="conversationState">我在听…</span><div id="recommendation" hidden></div></section>
+ <div id="transitionGlow"></div>
+ <div id="voiceState" aria-live="polite"><i></i><span>语音待开启</span></div>
+ <nav id="controls" aria-label="向导辅助控制"><button id="ask">问问小 D</button><button id="pause" hidden>暂停介绍</button><button id="next" hidden>继续介绍</button><button id="skip" hidden>跳过概览</button><button id="back" hidden>回到选择</button><button id="reset">回到首页</button><button id="labMediaButton">案例影像</button><button id="settings">AI 设置</button></nav>
+ <div id="status" role="status"></div>
+</main>
+<button id="fullscreen" title="全屏（F）">⛶ 全屏</button>
+<dialog id="labMediaDialog" aria-labelledby="labMediaTitle"><button id="closeLabMedia" aria-label="关闭案例影像">×</button><h2 id="labMediaTitle">实验室案例影像</h2><p class="media-disclosure">图片和视频取自实验室介绍材料，展示的方案与演示不能单独证明项目当前已部署或开放。</p><section><h3>方向与案例图片</h3><div id="labGallery"></div></section><section><h3>案例视频</h3><div id="labClips"></div></section></dialog>
+<dialog id="labImageDialog" aria-labelledby="labImageTitle"><button id="closeLabImage" aria-label="关闭图片">×</button><img id="labImagePreview" alt=""><div><h2 id="labImageTitle"></h2><p id="labImageCaption"></p></div></dialog>
+<section id="mediaStage" aria-label="实验室项目全屏展示" hidden><div id="mediaStageVideoLinks" hidden aria-live="polite"></div><button id="closeMediaStage" aria-label="返回案例列表">← 返回案例列表</button><div id="mediaStageFrame"></div><article id="mediaStageCopy"><span id="mediaStageCaption"></span><h2 id="mediaStageTitle"></h2><p id="mediaStageText"></p><small>素材来自实验室介绍演示稿，展示内容不单独证明当前部署或开放状态。</small></article></section>
+<div id="welcomeBubble" hidden></div><aside id="guideCompanion" aria-label="小 D 实验室向导" aria-live="polite"><div id="guideBubble" class="speech-bubble">你好，我是小 D。</div><div class="companion-robot" role="img" aria-label="小 D 机器人"></div></aside>
+<dialog id="voiceSettings"><button id="closeSettings" aria-label="关闭">×</button><h2>小 D 的声音</h2><p>优先选择设备已有的自然中文声音。</p><label for="voiceSelect">中文声音</label><select id="voiceSelect"></select><div class="settings-actions"><button id="sampleVoice">听听这个声音</button><button id="sound">声音开</button></div><p class="settings-note">浏览器语音的音色取决于设备；当前未接入云端语音模型。</p></dialog>
+
+<script src="content.js"></script><script src="projects.js"></script><script src="media-stage.js"></script><script src="rig.js"></script><script src="motion.js"></script><script src="voice.js"></script><script src="app.js"></script><script src="lab-ui.js"></script><script src="realtime.js"></script></body></html>
