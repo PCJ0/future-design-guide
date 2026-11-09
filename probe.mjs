@@ -1,0 +1,11 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const config=JSON.parse(await readFile(new URL('./.local/config.json',import.meta.url),'utf8'));
+const name=process.argv[2];
+const args=name==='inno_search_projects'?{query:'',limit:2}:name==='inno_read_project'?{project_id:'2025-00',section:'overview'}:{};
+const r=await fetch(config.mcpUrl,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream',Authorization:`Bearer ${config.mcpToken}`},body:JSON.stringify({jsonrpc:'2.0',id:1,method:name?'tools/call':'tools/list',params:name?{name,arguments:args}:{}}),signal:AbortSignal.timeout(30000)});
+const raw=await r.text();
+console.log('HTTP',r.status);
+if(!r.ok)throw new Error('MCP request failed');
+const data=raw.trim().startsWith('{')?JSON.parse(raw):JSON.parse(raw.split('\n').find(x=>x.startsWith('data:')).slice(5));
+await writeFile(new URL(name?'./.local/probe-result.json':'./.local/tools.json',import.meta.url),JSON.stringify(data,null,2));
+console.log(JSON.stringify(data,null,2));
