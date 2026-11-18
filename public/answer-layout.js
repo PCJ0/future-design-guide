@@ -6,6 +6,11 @@ export function groupAnswerDirections(segments){
   const groups=[];
   for(const segment of segments||[]){
     const text=String(segment.text||'').trim();if(!text)continue;
+    // A report chapter is one semantic section. Do not split its numbered subpoints
+    // or merge it into the previous direction: source cards belong to that chapter.
+    if(/^第[一二三四五六七八九十\d]+(?:章|部分)/.test(text)){
+      groups.push({text,projects:[...(segment.projects||[])],direction:false});continue;
+    }
     const parts=text.split(heading).map(x=>x.trim()).filter(Boolean);
     const multiple=parts.filter(x=>startsDirection.test(x)).length>1;
     for(const part of parts){

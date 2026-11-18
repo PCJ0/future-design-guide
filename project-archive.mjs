@@ -1,4 +1,5 @@
-const origin='https://opendesign.cc';
+import {LIBRARY_ORIGIN} from './project-library.mjs';
+const origin=LIBRARY_ORIGIN;
 const cache=new Map();let catalogCache=null;
 async function responseText(response){
  let size=0,text='';const decoder=new TextDecoder();for await(const chunk of response.body){size+=chunk.length;if(size>2_500_000)throw Error('资料文件过大');text+=decoder.decode(chunk,{stream:true});}return text+decoder.decode();
@@ -13,9 +14,9 @@ export function extractArchiveText(value){
 export async function loadProjectArchive(projectId,{fetcher=fetch,useCache=true}={}){
  if(!/^[\w-]+$/.test(projectId))throw Error('项目编号无效');
  if(useCache&&cache.get(projectId)?.until>Date.now())return cache.get(projectId).data;
- const pageUrl=`${origin}/inno/dossier/?project=${encodeURIComponent(projectId)}`;
+ const pageUrl=`${origin}/dossier/?project=${encodeURIComponent(projectId)}`;
  const result={status:'unavailable',summary:'',text:'',pageUrl,sourceUrl:null};
- const get=url=>fetcher(url,{signal:AbortSignal.timeout(10000),redirect:'error'});
+ const get=url=>fetcher(url,{signal:AbortSignal.timeout(10000),redirect:'manual'});
  try{
   let rows;if(useCache&&catalogCache?.until>Date.now())rows=catalogCache.rows;
   else{const r=await get(origin+'/inno/portal/catalog.json');if(r.ok){rows=JSON.parse(await responseText(r));if(useCache)catalogCache={rows,until:Date.now()+900000};}}
@@ -26,7 +27,8 @@ export async function loadProjectArchive(projectId,{fetcher=fetch,useCache=true}
   const asset=links.map(link=>{try{return new URL(link,origin);}catch{return null;}}).find(u=>u?.origin===origin&&u.pathname==='/inno/asset'&&u.searchParams.get('project')===projectId&&u.searchParams.get('kind')==='original');
   if(asset){
    result.sourceUrl=asset.href;const raw=await get(asset.href);
-   if([401,403].includes(raw.status))result.status='requires_auth';
+   if([301,302,303,307,308].includes(raw.status)){const location=raw.headers.get('location')||'';result.status=location.includes('/login')?'requires_auth':'unavailable';}
+   else if([401,403].includes(raw.status))result.status='requires_auth';
    else if(raw.ok){const type=raw.headers.get('content-type')||'';
     if(/json|text\/plain/.test(type)){const body=await responseText(raw);try{result.text=extractArchiveText(JSON.parse(body));}catch{if(type.includes('text/plain'))result.text=body.trim();}result.status=result.text?'available':'unsupported';}
     else result.status='unsupported';

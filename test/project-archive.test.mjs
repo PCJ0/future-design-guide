@@ -13,6 +13,7 @@ test('archive loads original content through the source link advertised on the d
 test('protected originals retain the public excerpt without pretending it is full text',async()=>{
  const result=await loadProjectArchive(id,{fetcher:fixture(401),useCache:false});assert.equal(result.status,'requires_auth');assert.equal(result.text,'');assert.equal(result.summary,'来自题录的简介片段');assert.ok(result.sourceUrl.includes('source=S01'));
 });
+test('login redirect is explicitly an authorization requirement, not a network error',async()=>{const result=await loadProjectArchive(id,{useCache:false,fetcher:async url=>url.endsWith('catalog.json')?Response.json([]):url.includes('/dossier/')?new Response(`<a href="/inno/asset?project=${id}&amp;kind=original">原件</a>`):new Response('',{status:302,headers:{Location:'https://opendesign.cc/inno/login/?next=/inno/asset'}})});assert.equal(result.status,'requires_auth');assert.equal(result.text,'');});
 test('archive does not serialize arbitrary metadata as project prose',()=>{
  assert.equal(extractArchiveText({project_id:id,review_status:'unknown'}),'');assert.equal(extractArchiveText({content:['介绍一','介绍二']}),'介绍一\n\n介绍二');
 });

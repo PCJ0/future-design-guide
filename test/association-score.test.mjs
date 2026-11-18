@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {AssociationEvidence,assessAssociation,geometry} from '../association-score.mjs';
+const routes=[{function:'降低内腔加工损伤',project_ids:['test-project']}];
+const evidence=new AssociationEvidence();
+evidence.register('inno_read_project',{project_id:'test-project',section:'records'},{structuredContent:{data:[{id:'r1',entity:'technical',title:'测试用机制',cells:{principle:{value:'通过可控流变介质在复杂内腔传递去除作用。',content_nature:'source_statement',source_ids:['test-source'],value_state:'known'}}}]}});
+const item={project_id:'test-project',route_index:0,function:4,transfer:3,constraints:null,conflict:false,reason:'测试夹具；企业材料与尺度待确认',anchors:[{ref:'test-project:r1:principle',quote:'通过可控流变介质在复杂内腔传递去除作用'}]};
+test('有原文依据才能算分，未知约束设上限，几何单调',()=>{const s=assessAssociation(item,{routes,evidence});assert.equal(s.raw,.788);assert.equal(s.score,.69);assert.equal(s.width,6.52);assert.equal(s.length,662.4);assert.ok(geometry(.9).width>geometry(.3).width);assert.ok(geometry(.9).length>geometry(.3).length);});
+test('无依据不是零分，不生成光束',()=>{const s=assessAssociation({...item,anchors:[],function:null,transfer:null},{routes,evidence});assert.equal(s.score,null);assert.equal(s.length,0);});
+test('伪造锚点与项目被拒绝',()=>{assert.throws(()=>assessAssociation({...item,project_id:'fake'},{routes,evidence}));assert.throws(()=>assessAssociation({...item,anchors:[{ref:'fake',quote:'杜撰资料'}]},{routes,evidence}));});
+test('冲突降分，评分可以下降',()=>{const s=assessAssociation({...item,conflict:true},{routes,evidence});assert.equal(s.score,.29);assert.equal(s.length,278.4);});
+test('奖项与单位不作为机制评分依据',()=>{const e=new AssociationEvidence();e.register('inno_read_project',{project_id:'test-project',section:'records'},{structuredContent:{data:[{id:'a1',entity:'award',cells:{award_name:{value:'测试名称',content_nature:'source_statement'}}}]}});assert.equal(e.context()[0].anchors.length,0);});

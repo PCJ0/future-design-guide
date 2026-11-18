@@ -1,3 +1,32 @@
 .local/
+.local.*
 node_modules/
 *.log
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local-only backups, interview material and verification output
+_backup/
+review/
+公司资料/
+企业参观报告样式/
+休眠动效预览/
+AI思考动画样稿/
+UI/
+Windows免安装部署包/
+*.zip
+*.sha256.txt
+回退*.bat
+rollback-*.ps1
+rollback-*.mjs
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

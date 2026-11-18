@@ -1,5 +1,11 @@
+import {MCP_URL,normalizeMcpUrl} from './project-library.mjs';
+import {createReasoningStream} from './reasoning-stream.mjs';
+import {selectCatalog} from './public/dense-topology.js';
+import {inspectCandidates,candidatePairs} from './association-pipeline.mjs';
+import {AssociationEvidence,assessAssociation,assessmentTool,assessmentInstruction,geometry} from './association-score.mjs';
 import {loadProjectArchive} from './project-archive.mjs';
 import {registerProjectRead,attachProjectReferences} from './project-references.mjs';
+import {informationProfileSchema,informationAssessmentInstruction,validateInformationProfile,chooseOutputPolicy,unknownInformationProfile,finalAnswerInstruction,presentAnswerTool as createPresentAnswerTool,prepareAdaptiveAnswer} from './output-policy.mjs';
 import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -10,8 +16,8 @@ import {voiceModel,introduction,voiceEndpoint,recognitionSession,verifiedSpeech}
 import {loadCatalog,catalogContext,toolData} from './catalog.mjs';
 import {preserveConversation} from './conversation.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)),port=Number(process.env.PORT||5188);
-const defaults={mcpUrl:'https://opendesign.cc/inno/mcp/api',mcpToken:'',deepseekModel:'deepseek-v4.1-flash-1017',bailianKey:'',workspaceId:'',region:'cn-beijing',voiceModel,voice:''};
-async function config(){try{const c={...defaults,...JSON.parse(await readFile(path.join(root,'.local/config.json'),'utf8'))};if(c.deepseekModel==='deepseek-flash')c.deepseekModel=defaults.deepseekModel;c.voiceModel=voiceModel;delete c.asrModel;delete c.ttsModel;if(c.voice==='Cherry')c.voice='';return c;}catch(e){if(e.code==='ENOENT')return {...defaults};throw Error('本机配置文件无效');}}
+const defaults={mcpUrl:MCP_URL,mcpToken:'',deepseekModel:'deepseek-v4.1-flash-1017',bailianKey:'',workspaceId:'',region:'cn-beijing',voiceModel,voice:''};
+async function config(){try{const c={...defaults,...JSON.parse(await readFile(path.join(root,'.local/config.json'),'utf8'))};c.mcpUrl=normalizeMcpUrl(c.mcpUrl);if(c.deepseekModel==='deepseek-flash')c.deepseekModel=defaults.deepseekModel;c.voiceModel=voiceModel;delete c.asrModel;delete c.ttsModel;if(c.voice==='Cherry')c.voice='';return c;}catch(e){if(e.code==='ENOENT')return {...defaults};throw Error('本机配置文件无效');}}
 let saving=Promise.resolve(),busy=false;
 const sessions=new Map();
 const approvedSpeech=new Map([['introduction',introduction]]);
@@ -29,7 +35,7 @@ const server=http.createServer(async(req,res)=>{
     if(url.pathname==='/api/config'&&req.method==='POST'){
       if(busy)return json(res,409,{error:'请先停止当前分析'});
       const input=await body(req);const save=saving.then(async()=>{const c=await config();for(const key of Object.keys(defaults))if(typeof input[key]==='string'&&input[key].trim())c[key]=input[key].trim();
-        if(c.mcpUrl!==defaults.mcpUrl)throw Error('此版本只连接已确认的好设计项目库');
+        c.mcpUrl=normalizeMcpUrl(c.mcpUrl);
         if(!['cn-beijing','ap-southeast-1'].includes(c.region)||!/^[\w-]*$/.test(c.workspaceId))throw Error('百炼地域或业务空间格式无效');
         for(const key of ['deepseekModel','voiceModel','voice'])if(c[key]&&!/^[\w./-]{1,120}$/.test(c[key]))throw Error('模型或音色ID无效');
         if(c.voiceModel!==voiceModel)throw Error(`本版实时语音使用 ${voiceModel}`);
@@ -86,53 +92,119 @@ async function chat(req,res){
     send('stage',{text:'读取全库题录，准备跨行业关联'});
     const catalog=await loadCatalog(c,{root,signal:controller.signal,onProgress:e=>send('catalog_progress',e)});
     send('catalog_ready',{projects:catalog.projects.length,methods:catalog.methods.length,cached:catalog.cached,fetchedAt:catalog.fetchedAt});
+    send('catalog_graph',{projects:selectCatalog(catalog.projects),total:catalog.projects.length,scope:'catalog_membership_only'});
     messages.splice(1,0,{role:'system',content:catalogContext(catalog)});
     const projectIds=new Set(catalog.projects.map(p=>p.id)),methodIds=new Set(catalog.methods.map(m=>m.method_id));
     send('stage',{text:'连接项目与方法库'});const list=await rpc(c,'tools/list',{},controller.signal);const permitted=list.tools.filter(t=>t.name.startsWith('inno_')&&t.annotations?.readOnlyHint);
     const tools=permitted.map(t=>({type:'function',function:{name:t.name,description:t.description,parameters:t.inputSchema}}));tools.push({type:'function',function:{name:'show_analysis',description:'向企业展示可核对的工作摘要：已知需求、抽象功能、正在比较的依据维度或下一步核查。不得提供私有逐字思维链。',parameters:{type:'object',properties:{summary:{type:'string'}},required:['summary']}}});
-    tools.push({type:'function',function:{name:'map_need',description:'从全库题录跨行业联想，将已知需求、功能抽象、来源候选和待核验的迁移设想展示给企业；必须在形成初步方向前调用。',parameters:{type:'object',properties:{need:{type:'string'},unknowns:{type:'array',items:{type:'string'}},routes:{type:'array',items:{type:'object',properties:{function:{type:'string'},hypothesis:{type:'string'},project_ids:{type:'array',items:{type:'string'}},method_ids:{type:'array',items:{type:'string'}}},required:['function','hypothesis','project_ids','method_ids']}}},required:['need','unknowns','routes']}}});
-    const presentAnswerTool={type:'function',function:{name:'present_answer',description:'以结构化分段提交最终企业建议。每个编号方向必须作为一个独立segment，包含该方向的完整说明；每个segment只关联实际用于该方向推理且本轮已读取档案的项目ID；若没有项目支撑则project_ids为空。不得为展示卡片而硬关联。',parameters:{type:'object',properties:{segments:{type:'array',items:{type:'object',properties:{text:{type:'string'},project_ids:{type:'array',items:{type:'string'}}},required:['text','project_ids']}}},required:['segments']}}};
+    tools.push({type:'function',function:{name:'map_need',description:'从全库题录跨行业联想，将已知需求、功能抽象、来源候选和待核验的迁移设想展示给企业；必须在形成初步方向前调用。',parameters:{type:'object',properties:{information_profile:informationProfileSchema,need:{type:'string'},unknowns:{type:'array',items:{type:'string'}},routes:{type:'array',items:{type:'object',properties:{function:{type:'string'},hypothesis:{type:'string'},project_ids:{type:'array',items:{type:'string'}},method_ids:{type:'array',items:{type:'string'}}},required:['function','hypothesis','project_ids','method_ids']}}},required:['information_profile','need','unknowns','routes']}}});
+    const presentAnswerTool=createPresentAnswerTool();
+    // Profile is attached to the current verified user context. Technical retrieval
+    // may refine a route, but it cannot change enterprise information coverage.
+    let informationProfile=unknownInformationProfile(),outputPolicy=chooseOutputPolicy(informationProfile);
     const verifiedProjectIds=new Set();let mapped=false,analysisShown=false,mappedRoutes=[],externalCallCount=0;
+    const associationEvidence=new AssociationEvidence(),associationScores=new Map(),inspections=new Map(),scoreSignatures=new Map();let scoringRound=0,scoreDirty=false;
+    const emitRecords=projectId=>send('graph_records',{records:associationEvidence.graphRecords(projectId),scope:'actually_read_fields'});
+    const emitIndustries=()=>send('industry_classifications',{projects:[...new Set(mappedRoutes.flatMap(r=>r.project_ids))].map(projectId=>({projectId,industry:associationEvidence.industry(projectId)}))});
+    const emitScores=()=>send('association_scores',{assessments:[...associationScores.values()].map(a=>({...a,industry:associationEvidence.industry(a.projectId)}))});
+    const emitAssociation=()=>send('association',{need:mappedNeed,unknowns:mappedUnknowns,routes:mappedRoutes.map(route=>({...route,projects:route.project_ids.map(pid=>({...catalog.projects.find(p=>p.id===pid),industry:associationEvidence.industry(pid)})),methods:(route.method_ids||[]).map(mid=>catalog.methods.find(m=>m.method_id===mid))}))});
+    let mappedNeed='',mappedUnknowns=[];
+    async function readCandidate(name,args){
+      const callId=crypto.randomUUID(),started=Date.now();send('tool_start',{id:callId,name,args});let result;
+      try{result=await rpc(c,'tools/call',{name,arguments:args},controller.signal);}catch(e){if(controller.signal.aborted)throw e;result={isError:true,content:[{type:'text',text:e.message}]};}
+      associationEvidence.register(name,args,result);emitRecords(args.project_id);emitIndustries();scoreDirty=true;send('tool_result',{id:callId,name,args,result,ms:Date.now()-started,failed:!!result.isError});
+      if(registerProjectRead(verifiedProjectIds,name,args,result))send('project_verified',{projectId:args.project_id});return result;
+    }
+    async function inspectProjects(ids){
+      const result=await inspectCandidates(ids,{evidence:associationEvidence,signal:controller.signal,read:readCandidate,onProgress:e=>{inspections.set(e.projectId,e);send('candidate_status',e);emitRecords(e.projectId);emitIndustries();},readArchive:async project_id=>{
+        const id=crypto.randomUUID(),started=Date.now();send('tool_start',{id,name:'read_original_archive',args:{project_id}});const archive=await loadProjectArchive(project_id);
+        send('tool_result',{id,name:'read_original_archive',args:{project_id},ms:Date.now()-started,failed:false,result:{structuredContent:{status:archive.status,source_url:archive.sourceUrl,page_url:archive.pageUrl}}});return archive;
+      }});return [...result.values()].map(r=>({project_id:r.id,status:r.status,pages:r.pages,source:associationEvidence.context([r.id]).map(p=>({...p,anchors:p.anchors.slice(0,24)}))}));
+    }
+    async function evaluateRoutes(){
+      if(!mapped||!scoreDirty)return;scoreDirty=false;
+      const pairs=candidatePairs(mappedRoutes).filter(pair=>{
+        const key=`${pair.route_index}:${pair.project_id}`,signature=JSON.stringify(associationEvidence.context([pair.project_id]));return signature!==scoreSignatures.get(key);
+      });
+      if(!pairs.length)return;
+      send('stage',{text:'逐项评估候选项目与企业问题的关联度'});
+      for(let offset=0;offset<pairs.length;offset+=2){
+        const batch=pairs.slice(offset,offset+2),context=associationEvidence.context(batch.map(p=>p.project_id));
+        for(const pair of batch){const key=`${pair.route_index}:${pair.project_id}`;scoreSignatures.set(key,JSON.stringify(associationEvidence.context([pair.project_id])));}
+        const request={enterprise:preserveConversation(messages).filter(m=>m.role==='user'),routes:mappedRoutes,pairs_to_assess:batch,sources:context};
+        let remaining=batch;
+        for(let attempt=0;attempt<2&&remaining.length;attempt++){
+          const scoreCalls=[],issues=[];let pulse=false;
+          try{
+            const round=`评估${++scoringRound}`;send('model_wait',{round,model:c.deepseekModel});
+            const assessmentMessages=[{role:'system',content:assessmentInstruction+' 本次只评估pairs_to_assess中的每一对，route_index不能改。必须一项不漏；没有正文也返回明确原因。不要把来源项目所属行业当作企业需求行业。'},{role:'user',content:JSON.stringify({...request,pairs_to_assess:remaining})}];
+            const reasoning=createReasoningStream(send,{round,kind:'assessment'});let reasoningFailed=true;
+            try{for await(const delta of deepseek(c,assessmentMessages,[assessmentTool],controller.signal,{toolChoice:{type:'function',function:{name:'assess_associations'}},onTelemetry:stats=>send('model_stats',{round,...stats})})){
+              if(delta.reasoning_content){reasoning.append(delta.reasoning_content);if(!pulse){send('thinking_started',{round});pulse=true;}}
+              for(const tc of delta.tool_calls||[]){const i=tc.index??0;scoreCalls[i]??={function:{name:'',arguments:''}};if(tc.function?.name)scoreCalls[i].function.name+=tc.function.name;if(tc.function?.arguments)scoreCalls[i].function.arguments+=tc.function.arguments;}
+            }reasoningFailed=false;}finally{reasoning.finish({failed:reasoningFailed});}
+            const accepted=new Set();
+            for(const call of scoreCalls){if(call.function.name!=='assess_associations')continue;const data=JSON.parse(call.function.arguments);for(const item of data.assessments||[]){if(!remaining.some(p=>p.project_id===item.project_id&&p.route_index===item.route_index))continue;try{
+              const assessed=assessAssociation(item,{routes:mappedRoutes,evidence:associationEvidence}),key=`${item.route_index}:${item.project_id}`;
+              if(assessed.score===null){assessed.status=inspections.get(item.project_id)?.status==='requires_auth'?'原件需授权 · 未评分':inspections.get(item.project_id)?.status==='read_failed'?'读取失败 · 未评分':'已核验 · 依据不足';}
+              associationScores.set(key,assessed);accepted.add(key);
+            }catch(e){issues.push({projectId:item.project_id,text:e.message});}}}
+            remaining=remaining.filter(p=>!accepted.has(`${p.route_index}:${p.project_id}`));emitScores();
+            send('assessment_complete',{completed:offset+batch.length-remaining.length,total:pairs.length});
+          }catch(e){if(controller.signal.aborted)throw e;issues.push({text:'评分调用暂未完成'});}
+          if(attempt===1)for(const pair of remaining){const key=`${pair.route_index}:${pair.project_id}`,previous=associationScores.get(key);associationScores.set(key,{...previous,projectId:pair.project_id,routeIndex:pair.route_index,score:null,status:'评分未完成 · 可重试',reason:issues.map(e=>e.text).join('；'),...geometry(null)});send('assessment_warning',{projectId:pair.project_id,text:'该候选评分未通过校验，保持未评分，不当作无关。'});}
+        }
+        emitScores();
+      }
+    }
+    async function syncFinalGraph(segments){
+      for(const segment of segments){for(const p of segment.projects||[]){associationEvidence.seed(p);if(!mappedRoutes.some(r=>r.project_ids.includes(p.id))){mappedRoutes.push({function:segment.text.slice(0,140),hypothesis:'最终建议中使用的来源参考，迁移条件仍需核验',project_ids:[p.id],method_ids:[]});scoreDirty=true;}}}
+      if(scoreDirty){emitAssociation();await evaluateRoutes();}
+      const adopted=new Set(segments.flatMap(s=>(s.projects||[]).map(p=>p.id)));send('association_adopted',{projectIds:[...adopted]});
+    }
     for(let turn=0;turn<=4;turn++){
+      await evaluateRoutes();
       const finalize=turn>=3;
-      if(!mapped&&!finalize)messages.push({role:'system',content:`当前处于需求关联阶段。${analysisShown?'继续形成关联，不要重复展示开场摘要。':'先调用show_analysis展示不超过两句的可核对工作摘要：企业已知目标、抽象出的功能，以及准备比较的资料维度；这是整理后的工作摘要，不是私有逐字思维链。'}随后调用map_need，基于企业已知信息给2到3条功能迁移假设及真实目录候选。此阶段不要输出面向企业的最终答复，系统随后会自动读取候选正文供你核验。未知信息标为待确认，不必等企业回答所有问题才形成初步路线。`});
-      if(finalize){messages.push({role:'system',content:'本轮资料读取到此结束。请将最终答复通过present_answer工具提交，按建议方向拆成segments，每个方向作为独立segment，编号、完整说明与该方向实际引用的project_ids放在一起；追问可独立成段，不要把全部档案集中放在末段；每段必须是直接对企业说的正式建议，并将该段确实引用的、已读取项目档案的项目ID放进project_ids。禁止在segments中出现“核验记录”“阶段小结”“还不是给企业的答复”“内部分析”“模型思考”“工具调用”等过程标签、写给开发者的话、免责声明式元评论或草稿说明。不要写答复前言，直接给企业建议。项目卡将紧跟对应文字段落。项目仅作概念参考时说明迁移假设与验证边界。没有项目依据的段落project_ids为空，不要强行关联。不要提搜索失败、档案缺失或“没有案例”。若企业尚处初步需求阶段，答复严格控制在300至500字，给2到3条贴近已知场景的方向；最多只问一个问题。'});send('stage',{text:'整理关联依据、迁移设想与验证步骤'});}
+      if(!mapped&&!finalize)messages.push({role:'system',content:`当前处于需求关联阶段。${analysisShown?'继续形成关联，不要重复展示开场摘要。':'先调用show_analysis展示不超过两句的可核对工作摘要：企业已知目标、抽象出的功能，以及准备比较的资料维度；这是整理后的工作摘要，不是私有逐字思维链。'}随后调用map_need，基于已知信息形成1到3条功能迁移假设及真实目录候选，没有业务背景时可以少给，不硬凑。在提交关联前按用户实际信息评估完整度。此阶段不要输出最终答复，系统随后读取候选正文供核验。未知标待确认，不等全部补齐才给初步帮助。\n${informationAssessmentInstruction}`});
+      if(finalize){messages.push({role:'system',content:finalAnswerInstruction(outputPolicy)});send('stage',{text:outputPolicy.mode==='full'?'按三部分十一章整理报告':outputPolicy.mode==='partial'?'整理可支撑的诊断章节':'整理初步方向与关键补充信息'});}
       send('answer_start');send('model_wait',{round:turn+1,model:c.deepseekModel});send('stage',{text:turn?'结合资料继续分析':'梳理企业业务与需求'});let message={role:'assistant',content:'',reasoning_content:''},calls=[];let pulse=false,lastThinkingUpdate=0;
       const roundTools=finalize?[presentAnswerTool]:!mapped?tools.filter(t=>t.function.name==='map_need'||t.function.name==='show_analysis'):tools;
-      for await(const delta of deepseek(c,messages,roundTools,controller.signal,{onTelemetry:stats=>{send('model_stats',{round:turn+1,...stats});appendFile(path.join(root,'.local/model-audit.jsonl'),JSON.stringify({time:new Date().toISOString(),sessionId:id,round:turn+1,...stats})+'\n').catch(()=>{});}})){
-        if(delta.reasoning_content){message.reasoning_content+=delta.reasoning_content;if(!pulse){send('thinking_started',{round:turn+1});send('stage',{text:'DeepSeek 思考模式正在分析'});pulse=true;}if(message.reasoning_content.length-lastThinkingUpdate>=80){lastThinkingUpdate=message.reasoning_content.length;send('thinking_progress',{round:turn+1,chars:lastThinkingUpdate});}}
+      const reasoning=createReasoningStream(send,{round:turn+1,kind:'analysis'});let reasoningFailed=true;
+      try{for await(const delta of deepseek(c,messages,roundTools,controller.signal,{toolChoice:finalize?{type:'function',function:{name:'present_answer'}}:undefined,onTelemetry:stats=>{send('model_stats',{round:turn+1,...stats});appendFile(path.join(root,'.local/model-audit.jsonl'),JSON.stringify({time:new Date().toISOString(),sessionId:id,round:turn+1,...stats})+'\n').catch(()=>{});}})){
+        if(delta.reasoning_content){reasoning.append(delta.reasoning_content);message.reasoning_content+=delta.reasoning_content;if(!pulse){send('thinking_started',{round:turn+1});send('stage',{text:'DeepSeek 思考模式正在分析'});pulse=true;}if(message.reasoning_content.length-lastThinkingUpdate>=80){lastThinkingUpdate=message.reasoning_content.length;send('thinking_progress',{round:turn+1,chars:lastThinkingUpdate});}}
         if(delta.content){message.content+=delta.content;send('delta',{text:delta.content});}
         for(const tc of delta.tool_calls||[]){const index=tc.index??0;calls[index]??={id:'',type:'function',function:{name:'',arguments:''}};if(tc.id)calls[index].id=tc.id;if(tc.function?.name)calls[index].function.name+=tc.function.name;if(tc.function?.arguments)calls[index].function.arguments+=tc.function.arguments;}
-      }
+      }reasoningFailed=false;}finally{reasoning.finish({failed:reasoningFailed});}
       if(!calls.length&&!mapped&&!finalize){messages.push(message,{role:'system',content:'请先调用map_need，把已知需求与功能/原理关联展示出来，并从题录选择候选后核验。不可以仅回复关键词没有命中或只追问而不给任何初步方向。'});continue;}
       if(!calls.length&&mapped&&turn<4){messages.push(message,{role:'system',content:'最终答复必须通过present_answer工具返回分段文字与项目ID关联。只写给企业看的正式建议，不要输出任何核验记录、阶段小结或说明自己正在分析。请现在调用工具。'});continue;}
-      if(!calls.length){const text=cleanEnterpriseText(message.content);if(!text){send('error',{text:'正式建议没有生成完整，请重新提交本轮需求。'});res.end();return;}messages.push({role:'assistant',content:text});sessions.set(id,preserveConversation(messages));if(sessions.size>10)sessions.delete(sessions.keys().next().value);const answerId=crypto.randomUUID();approvedSpeech.set(answerId,text);if(approvedSpeech.size>101)approvedSpeech.delete([...approvedSpeech.keys()].find(key=>key!=='introduction'));send('answer_segments',{segments:attachProjectReferences([{text,project_ids:[]}],catalog.projects,verifiedProjectIds)});send('done',{answerId});res.end();return;}
+      if(!calls.length){send('error',{text:'正式结果未通过自适应结构提交，请保留本轮输入并重试；不会用未核对的自由文本冒充完整报告。'});res.end();return;}
       for(const call of calls)if(!call.id)call.id=crypto.randomUUID();message.tool_calls=calls;messages.push(message);
       for(const call of calls){const name=call.function.name;let args;try{args=JSON.parse(call.function.arguments||'{}');}catch{call.function.arguments='{}';send('tool_argument_retry',{name:name||'未知工具',text:'参数格式未通过校验，正在重新生成结构化调用。'});messages.push({role:'tool',tool_call_id:call.id,content:'上一次工具参数不是合法JSON。请检查参数结构并重新调用工具；字符串中的引号必须转义，参数必须完整。'});continue;}
         if(name==='present_answer'){
-          const valid=Array.isArray(args.segments)&&args.segments.length>0&&args.segments.every(segment=>segment&&typeof segment.text==='string'&&segment.text.trim()&&Array.isArray(segment.project_ids));
-          if(!valid){messages.push({role:'tool',tool_call_id:call.id,content:'请重新提交有效的segments数组；每段包含text字符串和project_ids数组。'});continue;}
-          const segments=attachProjectReferences(args.segments.map(segment=>({...segment,text:cleanEnterpriseText(segment.text)})),catalog.projects,verifiedProjectIds);
+          let prepared;
+          try{prepared=prepareAdaptiveAnswer({...args,segments:Array.isArray(args.segments)?args.segments.map(segment=>({...segment,text:cleanEnterpriseText(segment.text)})):args.segments},outputPolicy);}catch(e){messages.push({role:'tool',tool_call_id:call.id,content:e.message+'。'+finalAnswerInstruction(outputPolicy)});continue;}
+          const segments=attachProjectReferences(prepared,catalog.projects,verifiedProjectIds);
           if(!segments.length){messages.push({role:'tool',tool_call_id:call.id,content:'请按每个建议方向返回独立segment及对应档案ID。'});continue;}
-          const answerText=segments.map(segment=>segment.text).join('\n\n');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({status:'已接受结构化答复，项目来源均来自本轮已读取档案'})},{role:'assistant',content:answerText});sessions.set(id,messages);if(sessions.size>10)sessions.delete(sessions.keys().next().value);const answerId=crypto.randomUUID();approvedSpeech.set(answerId,answerText);if(approvedSpeech.size>101)approvedSpeech.delete([...approvedSpeech.keys()].find(key=>key!=='introduction'));send('answer_segments',{segments});send('done',{answerId});res.end();return;
+          const answerText=segments.map(segment=>segment.text).join('\n\n');messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({status:'已接受结构化答复，项目来源均来自本轮已读取档案'})},{role:'assistant',content:answerText});sessions.set(id,messages);if(sessions.size>10)sessions.delete(sessions.keys().next().value);const answerId=crypto.randomUUID();approvedSpeech.set(answerId,answerText);if(approvedSpeech.size>101)approvedSpeech.delete([...approvedSpeech.keys()].find(key=>key!=='introduction'));await syncFinalGraph(segments);send('answer_segments',{segments,reportMode:outputPolicy.mode});send('done',{answerId,reportMode:outputPolicy.mode});res.end();return;
         }
         if(name==='show_analysis'){analysisShown=true;send('analysis',{text:String(args.summary||'')});messages.push({role:'tool',tool_call_id:call.id,content:'工作摘要已展示'});continue;}
         if(name==='map_need'){
+          try{informationProfile=validateInformationProfile(args.information_profile,preserveConversation(messages));outputPolicy=chooseOutputPolicy(informationProfile);}catch(e){messages.push({role:'tool',tool_call_id:call.id,content:e.message+'。'+informationAssessmentInstruction});continue;}
           const valid=typeof args.need==='string'&&Array.isArray(args.unknowns)&&Array.isArray(args.routes)&&args.routes.length>0&&args.routes.every(route=>route&&typeof route==='object'&&typeof route.function==='string'&&typeof route.hypothesis==='string'&&Array.isArray(route.project_ids)&&route.project_ids.every(p=>typeof p==='string'&&projectIds.has(p))&&Array.isArray(route.method_ids)&&route.method_ids.every(m=>typeof m==='string'&&methodIds.has(m)));
           if(valid){
-            mapped=true;mappedRoutes=args.routes;send('association',{need:args.need,unknowns:args.unknowns,routes:args.routes.map(route=>({...route,projects:route.project_ids.map(pid=>catalog.projects.find(p=>p.id===pid)),methods:route.method_ids.map(mid=>catalog.methods.find(m=>m.method_id===mid))}))});
-            const verified=[];
-            async function readCandidate(name,args){externalCallCount++;const callId=crypto.randomUUID(),started=Date.now();send('tool_start',{id:callId,name,args});let result;try{result=await rpc(c,'tools/call',{name,arguments:args},controller.signal);}catch(e){if(controller.signal.aborted)throw e;result={isError:true,content:[{type:'text',text:e.message}]};}send('tool_result',{id:callId,name,result,ms:Date.now()-started,failed:!!result.isError});if(registerProjectRead(verifiedProjectIds,name,args,result))send('project_verified',{projectId:args.project_id});verified.push({name,arguments:args,result});return result;}
-            const candidates=[...new Set(args.routes.flatMap(r=>r.project_ids))].slice(0,3);
-            for(const project_id of candidates){const overview=await readCandidate('inno_read_project',{project_id,section:'overview'});let data;try{data=toolData(overview);}catch{}if(data?.record_count>0)await readCandidate('inno_read_project',{project_id,section:'records',revision:data.publication_revision||null,limit:3});}
-            for(const method_id of [...new Set(args.routes.flatMap(r=>r.method_ids))].slice(0,2)){await readCandidate('inno_read_method',{method_id,section:'overview'});await readCandidate('inno_read_method',{method_id,section:'boundaries'});}
-            messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({status:'关联假设已展示，已自动读取候选正文和方法边界',verified,instruction:'以实际返回资料核对每条假设。题录只有名称的项目不能当作技术机制的证据；读到的记录不支持就舍弃，不要硬凑。资料仍不够时可继续查询。用简洁的2到3条路线回答；原理事实、迁移设想、待验证条件分清楚。'})});
+            mapped=true;mappedRoutes=args.routes.slice(0,3).map(r=>({...r,project_ids:[...new Set(r.project_ids)].slice(0,2)}));mappedNeed=args.need;mappedUnknowns=args.unknowns;
+            for(const [routeIndex,route] of mappedRoutes.entries())for(const projectId of route.project_ids){associationEvidence.seed(catalog.projects.find(p=>p.id===projectId));associationScores.set(`${routeIndex}:${projectId}`,{projectId,routeIndex,industry:associationEvidence.industry(projectId),score:null,status:'候选 · 等待读取',anchors:[],...geometry(null)});}
+            emitAssociation();emitScores();
+            const candidates=[...new Set(mappedRoutes.flatMap(r=>r.project_ids))];
+            const verified=await inspectProjects(candidates);
+            for(const method_id of [...new Set(args.routes.flatMap(r=>r.method_ids))].slice(0,2)){const result=await readCandidate('inno_read_method',{method_id,section:'overview'});verified.push({name:'inno_read_method',arguments:{method_id,section:'overview'},result});const boundaries=await readCandidate('inno_read_method',{method_id,section:'boundaries'});verified.push({name:'inno_read_method',arguments:{method_id,section:'boundaries'},result:boundaries});}
+            messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({instructions:finalAnswerInstruction(outputPolicy),informationProfile,verified,instruction:`以实际返回资料核对每条假设。题录只有名称的项目不能当作技术机制证据；资料不支持就舍弃，不硬凑。原理事实、迁移设想、待验证条件分清。当前信息完整度策略：${JSON.stringify(outputPolicy)}。检索只能补技术依据，不能把目录或助手推测当作本企业资料；最终严格按该策略展开。`})});
           }else messages.push({role:'tool',tool_call_id:call.id,content:'关联候选中有目录不存在的ID或格式无效，请根据题录纠正后再调用。'});continue;
         }
         if(!permitted.some(t=>t.name===name)){send('tool_argument_retry',{name:name||'未知工具',text:'工具名称未获准，正在重新规划查询。'});messages.push({role:'tool',tool_call_id:call.id,content:'该工具不可用。请从当前提供的只读工具中重新选择，不要重试这个工具。'});continue;}
         if(externalCallCount>=12){send('stage',{text:'资料核验已完成，正在整理建议'});messages.push({role:'tool',tool_call_id:call.id,content:'本轮资料查询上限已到，请使用已读取来源完成建议，不要继续查询。'});continue;}externalCallCount++;
         const callId=crypto.randomUUID(),started=Date.now();send('tool_start',{id:callId,name,args});let result;
-        try{result=await rpc(c,'tools/call',{name,arguments:args},controller.signal);if(registerProjectRead(verifiedProjectIds,name,args,result))send('project_verified',{projectId:args.project_id});send('tool_result',{id:callId,name,result,ms:Date.now()-started,failed:!!result.isError});}
+        try{result=await rpc(c,'tools/call',{name,arguments:args},controller.signal);associationEvidence.register(name,args,result);emitRecords(args.project_id);emitIndustries();if(['inno_read_project','inno_read_evidence'].includes(name))scoreDirty=true;if(registerProjectRead(verifiedProjectIds,name,args,result))send('project_verified',{projectId:args.project_id});send('tool_result',{id:callId,name,result,ms:Date.now()-started,failed:!!result.isError});}
         catch(e){if(controller.signal.aborted)throw e;result={isError:true,content:[{type:'text',text:e.message}]};send('tool_result',{id:callId,name,result,ms:Date.now()-started,failed:true});}
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(result)});
       }
@@ -154,4 +226,4 @@ wss.on('connection',async client=>{
     client.on('message',raw=>{try{const e=JSON.parse(raw);if(e.type==='finish'&&up.readyState===1){up.close();return;}if(e.type==='audio'&&typeof e.audio==='string'&&up.readyState===1&&up.bufferedAmount<500000)up.send(JSON.stringify({event_id:crypto.randomUUID(),type:'input_audio_buffer.append',audio:e.audio}));}catch{fail('音频数据无效');}});
   }catch(e){fail(e.message);}
 });
-server.listen(port,'127.0.0.1',()=>console.log(`企业访谈 AI · http://127.0.0.1:${port}`));
+server.listen(port,'127.0.0.1',async()=>{if(port===5188){await mkdir(path.join(root,'.local'),{recursive:true});await writeFile(path.join(root,'.local/runtime.json'),JSON.stringify({pid:process.pid,root,port,startedAt:Date.now()})).catch(()=>{});}console.log(`企业访谈 AI · http://127.0.0.1:${port}`);});
